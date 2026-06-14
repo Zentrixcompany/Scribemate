@@ -50,6 +50,34 @@ create table submissions (
 );
 ```
 
+## Supabase row-level security (RLS)
+For the app to work correctly, enable RLS on each table and add these policies.
+
+### Profiles
+```sql
+alter table profiles enable row level security;
+create policy "Allow authenticated users to insert own profile" on profiles for insert with check (auth.uid() = id);
+create policy "Allow users to read own profile" on profiles for select using (auth.uid() = id);
+create policy "Allow teachers to read student profiles" on profiles for select using (role = 'student' and teacher_id = auth.uid());
+```
+
+### Exams
+```sql
+alter table exams enable row level security;
+create policy "Allow teacher exam inserts" on exams for insert with check (teacher_id = auth.uid());
+create policy "Allow teacher exam select" on exams for select using (teacher_id = auth.uid());
+create policy "Allow student exam select" on exams for select using (assigned_student_ids @> array[auth.uid()]::uuid[]);
+```
+
+### Submissions
+```sql
+alter table submissions enable row level security;
+create policy "Allow teacher submission access" on submissions for select using (teacher_id = auth.uid());
+create policy "Allow student submission access" on submissions for select using (student_id = auth.uid());
+create policy "Allow student submission insert" on submissions for insert with check (student_id = auth.uid());
+create policy "Allow student submission update" on submissions for update using (student_id = auth.uid());
+```
+
 ## Notes
 - Teachers can register using the teacher registration page.
 - Students are created by teachers from the teacher dashboard.

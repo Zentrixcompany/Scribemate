@@ -83,43 +83,77 @@ async function handleRegister(event) {
     showToast(error.message);
     return;
   }
-  const user = data?.user;
 
+  const user = data?.user;
   if (!user) {
     showToast('Registration succeeded. Please check your email to confirm.');
     return;
   }
 
-  const profileResult = await supabaseClient.from('profiles').insert([
-    {
-      id: user.id,
-      name,
-      email,
-      role: 'teacher',
-    },
-  ]);
+  if (data.session) {
+    const profileResult = await supabaseClient.from('profiles').insert([
+      {
+        id: user.id,
+        name,
+        email,
+        role: 'teacher',
+      },
+    ]);
 
-  if (profileResult.error) {
-    showToast('Profile save failed.');
+    if (profileResult.error) {
+      showToast('Profile save failed. Please try logging in to complete setup.');
+      return;
+    }
+    await loadProfile(user.id);
     return;
   }
 
-  showToast('Registration complete. You can now log in.');
+  showToast('Registration complete. Please verify your email and then log in.');
   document.getElementById('form-register').reset();
 }
 
 async function loadProfile(userId) {
   const { data, error } = await supabaseClient.from('profiles').select('*').eq('id', userId).single();
   if (error || !data) {
-    showSection('auth');
-    return;
+    const { data: sessionData } = await supabaseClient.auth.getSession();
+    const user = sessionData?.session?.user;
+    if (!user || user.id !== userId) {
+      showSection('auth');
+      return;
+    }
+    const profile = await ensureUserProfile(user);
+    if (!profile) {
+      showSection('auth');
+      return;
+    }
+    currentProfile = profile;
+  } else {
+    currentProfile = data;
   }
-  currentProfile = data;
+
   if (currentProfile.role === 'teacher') {
     await loadTeacherDashboard();
   } else {
     await loadStudentDashboard();
   }
+}
+
+async function ensureUserProfile(user) {
+  const metadata = user.user_metadata || {};
+  const profile = {
+    id: user.id,
+    name: metadata.name || metadata.full_name || 'Scribemate user',
+    email: user.email,
+    role: metadata.role || 'teacher',
+    teacher_id: metadata.teacher_id || null,
+  };
+
+  const { data, error } = await supabaseClient.from('profiles').insert([profile]);
+  if (error) {
+    console.warn('Unable to create missing profile:', error.message || error);
+    return null;
+  }
+  return data?.[0] || null;
 }
 
 async function loadTeacherDashboard() {
@@ -338,32 +372,39 @@ async function handleCreateStudent(event) {
     return;
   }
 
-  const profileResult = await supabaseClient.from('profiles').insert([
-    {
-      id: studentId,
-      name,
-      email,
-      role: 'student',
-      teacher_id: currentProfile.id,
-    },
-  ]);
+  if (signup.data.session) {
+    const profileResult = await supabaseClient.from('profiles').insert([
+      {
+        id: studentId,
+        name,
+        email,
+        role: 'student',
+        teacher_id: currentProfile.id,
+      },
+    ]);
 
-  if (profileResult.error) {
-    showToast('Unable to save student profile.');
+    if (profileResult.error) {
+      showToast('Unable to save student profile.');
+      return;
+    }
+
+    await supabaseClient.auth.signOut();
+    const reLogin = await supabaseClient.auth.signInWithPassword({ email: teacherEmail, password: teacherPassword });
+    if (reLogin.error) {
+      showToast('Student created, but unable to sign back in. Please log in again.');
+      showSection('auth');
+      return;
+    }
+
+    showToast('Student account created successfully.');
+    document.getElementById('form-create-student').reset();
+    await loadProfile(reLogin.data.user.id);
     return;
   }
 
-  await supabaseClient.auth.signOut();
-  const reLogin = await supabaseClient.auth.signInWithPassword({ email: teacherEmail, password: teacherPassword });
-  if (reLogin.error) {
-    showToast('Student created, but unable to sign back in. Please log in again.');
-    showSection('auth');
-    return;
-  }
-
-  showToast('Student account created successfully.');
+  showToast('Student onboarding started. They must confirm their email before first login.');
   document.getElementById('form-create-student').reset();
-  await loadProfile(reLogin.data.user.id);
+  await loadTeacherDashboard();
 }
 
 async function handleSubmitAnswer(event) {
