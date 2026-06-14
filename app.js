@@ -55,17 +55,22 @@ function showToast(message) {
   setTimeout(() => toast.classList.add('hidden'), 3600);
 }
 
+async function getCurrentUser() {
+  const { data: { session } } = await supabaseClient.auth.getSession();
+  return session?.user || null;
+}
+
 async function handleLogin(event) {
   event.preventDefault();
   const email = document.getElementById('login-email').value.trim();
   const password = document.getElementById('login-password').value.trim();
 
   const { data, error } = await supabaseClient.auth.signInWithPassword({ email, password });
-  if (error || !data?.user) {
+  if (error || !data?.user || !data?.session?.user) {
     showToast(error?.message || 'Login failed.');
     return;
   }
-  await loadProfile(data.user.id);
+  await loadProfile(data.session.user.id);
 }
 
 async function handleRegister(event) {
@@ -86,11 +91,15 @@ async function handleRegister(event) {
 
   const user = data?.user;
   if (!user) {
-    showToast('Registration succeeded. Please check your email to confirm.');
+    showToast('Account created. Attempting automatic login...');
+    setTimeout(() => {
+      handleAutoLogin(email, password);
+    }, 1500);
     return;
   }
 
-  if (data.session) {
+  const activeUser = await getCurrentUser();
+  if (data.session && activeUser?.id === user.id) {
     const profileResult = await supabaseClient.from('profiles').insert([
       {
         id: user.id,
@@ -108,8 +117,23 @@ async function handleRegister(event) {
     return;
   }
 
-  showToast('Registration complete. Please verify your email and then log in.');
+  showToast('Account created! Logging you in automatically...');
+  setTimeout(() => {
+    handleAutoLogin(email, password);
+  }, 1500);
   document.getElementById('form-register').reset();
+}
+
+async function handleAutoLogin(email, password) {
+  const { data, error } = await supabaseClient.auth.signInWithPassword({ email, password });
+  if (error) {
+    showToast('Please log in manually with your credentials.');
+    showSection('auth');
+    return;
+  }
+  if (data?.user) {
+    await loadProfile(data.user.id);
+  }
 }
 
 async function loadProfile(userId) {
@@ -147,6 +171,12 @@ async function ensureUserProfile(user) {
     role: metadata.role || 'teacher',
     teacher_id: metadata.teacher_id || null,
   };
+
+  const currentUser = await getCurrentUser();
+  if (!currentUser || currentUser.id !== user.id) {
+    console.warn('No active authenticated session to insert missing profile.');
+    return null;
+  }
 
   const { data, error } = await supabaseClient.from('profiles').insert([profile]);
   if (error) {
@@ -368,11 +398,14 @@ async function handleCreateStudent(event) {
 
   const studentId = signup.data.user?.id;
   if (!studentId) {
-    showToast('Student created; please check confirmation email.');
+    showToast('Student account created. They should now be able to log in.');
+    document.getElementById('form-create-student').reset();
+    await loadTeacherDashboard();
     return;
   }
 
-  if (signup.data.session) {
+  const activeUser = await getCurrentUser();
+  if (signup.data.session && activeUser?.id === studentId) {
     const profileResult = await supabaseClient.from('profiles').insert([
       {
         id: studentId,
@@ -402,7 +435,7 @@ async function handleCreateStudent(event) {
     return;
   }
 
-  showToast('Student onboarding started. They must confirm their email before first login.');
+  showToast('Student account created! They can now log in with their credentials.');
   document.getElementById('form-create-student').reset();
   await loadTeacherDashboard();
 }

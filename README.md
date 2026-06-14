@@ -50,6 +50,14 @@ create table submissions (
 );
 ```
 
+### Disable email confirmation (required for smooth signup)
+1. Go to your Supabase project dashboard
+2. Navigate to **Authentication** → **Providers** → **Email**
+3. Toggle **Confirm email** to OFF
+4. Save changes
+
+This allows users to sign up and log in immediately without waiting for email verification.
+
 ## Supabase row-level security (RLS)
 For the app to work correctly, enable RLS on each table and add these policies.
 
@@ -57,6 +65,7 @@ For the app to work correctly, enable RLS on each table and add these policies.
 ```sql
 alter table profiles enable row level security;
 create policy "Allow authenticated users to insert own profile" on profiles for insert with check (auth.uid() = id);
+create policy "Allow teachers to insert student profiles" on profiles for insert with check (role = 'student' and teacher_id = auth.uid());
 create policy "Allow users to read own profile" on profiles for select using (auth.uid() = id);
 create policy "Allow teachers to read student profiles" on profiles for select using (role = 'student' and teacher_id = auth.uid());
 ```
