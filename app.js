@@ -332,13 +332,14 @@ async function openStudentExam(examId) {
   const questionsInfo = document.getElementById('exam-questions-info');
   const questionsList = document.getElementById('exam-questions-list');
   
-  if (exam.questions) {
+  const questions = Array.isArray(exam.questions)
+    ? exam.questions
+    : String(exam.questions || '').split('\n').map((q) => q.trim()).filter(Boolean);
+
+  if (questions.length) {
     questionsInfo.style.display = 'none';
     questionsList.style.display = 'block';
-    questionsList.innerHTML = exam.questions
-      .split('\n')
-      .map((q) => q.trim())
-      .filter(Boolean)
+    questionsList.innerHTML = questions
       .map((q) => `<li>${escapeHtml(q)}</li>`)
       .join('');
   } else {
@@ -381,7 +382,12 @@ async function handleCreateExam(event) {
     return;
   }
 
-  if (!questionsText.trim()) {
+  const questionsArray = questionsText
+    .split('\n')
+    .map((q) => q.trim())
+    .filter(Boolean);
+
+  if (!questionsArray.length) {
     showToast('Questions file appears to be empty.');
     return;
   }
@@ -392,15 +398,15 @@ async function handleCreateExam(event) {
       id: crypto.randomUUID(),
       title,
       description,
-      questions: questionsText,
+      questions: questionsArray,
       teacher_id: currentProfile.id,
       assigned_student_ids: students.map((student) => student.id),
-      created_at: new Date().toISOString(),
     },
   ]);
 
   if (error) {
-    showToast('Unable to create exam.');
+    console.error('Exam insert error:', error);
+    showToast(error.message || 'Unable to create exam.');
     return;
   }
 
