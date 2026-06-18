@@ -125,6 +125,12 @@ function initVoiceAssistant() {
 
     // In dictation mode, show interim text immediately and commit on final or short silence
     if (dictationMode) {
+      // Filter out our own assistant phrases so 'dictation mode enabled' is not recorded
+      const assistantPhrasePattern = /\b(dictation mode enabled|voice assistant activated|you can now dictate your answer|voice assistant active|available commands|say help)\b/i;
+      if (assistantPhrasePattern.test(normalized)) {
+        return;
+      }
+
       const answerField = document.getElementById('student-answer');
       const lastResult = event.results[event.results.length - 1];
       const interimText = transcript;
@@ -300,9 +306,22 @@ function prewarmMicPermission() {
 
 function speakText(text) {
   if (!speechSynthesisSupported) return;
+  // Temporarily pause recognition while assistant is speaking
+  const wasRecognizing = isRecognizing;
+  if (wasRecognizing) {
+    stopRecognition();
+  }
+
   const utterance = new SpeechSynthesisUtterance(text);
   utterance.rate = 0.95;
   utterance.pitch = 1.0;
+
+  utterance.addEventListener('end', () => {
+    if (wasRecognizing && voiceAssistantActive) {
+      startRecognition();
+    }
+  });
+
   window.speechSynthesis.cancel();
   window.speechSynthesis.speak(utterance);
 }
