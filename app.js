@@ -24,11 +24,8 @@ let speechSynthesisSupported = 'speechSynthesis' in window;
 async function init() {
   bindEvents();
   initVoiceAssistant();
-  const { data: { session } } = await supabaseClient.auth.getSession();
-  if (session?.user) {
-    await loadProfile(session.user.id);
-    return;
-  }
+  // Auto signout on page refresh
+  await supabaseClient.auth.signOut();
   showSection('auth');
 }
 
@@ -102,17 +99,15 @@ function initVoiceAssistant() {
     const hasWakeWord = wakeWords.some((word) => normalized.startsWith(word));
     const hasCommandKeyword = /\b(help|next|previous|back|read|submit|clear|dictate|write|stop|skip)\b/i.test(normalized);
 
-    if (!dictationMode) {
-      if (!hasWakeWord && !hasCommandKeyword) {
-        return;
-      }
-      if (!hasWakeWord && hasCommandKeyword) {
-        // Ignore passive classroom noise unless a wake word is used.
-        return;
-      }
+    // Check for commands first, regardless of dictation mode
+    if (hasCommandKeyword) {
+      const cleaned = normalized.replace(new RegExp(`^(?:${wakeWords.join('|')})\s*`, 'i'), '').trim();
+      handleVoiceCommand(cleaned);
+      return;
     }
 
-    if (dictationMode && !hasWakeWord && !hasCommandKeyword) {
+    // In dictation mode, add non-command text to answer field
+    if (dictationMode) {
       const answerField = document.getElementById('student-answer');
       if (answerField) {
         answerField.value = `${answerField.value}${answerField.value ? ' ' : ''}${transcript}`;
@@ -120,9 +115,6 @@ function initVoiceAssistant() {
       }
       return;
     }
-
-    const cleaned = normalized.replace(new RegExp(`^(?:${wakeWords.join('|')})\s*`, 'i'), '').trim();
-    handleVoiceCommand(cleaned);
   });
 
   speechRecognition.addEventListener('end', () => {
@@ -195,6 +187,11 @@ function goToQuestion(index) {
   });
   const questionText = currentQuestionElements[currentQuestionIndex]?.textContent || 'Unable to read the current question.';
   speakText(`Question ${currentQuestionIndex + 1}: ${questionText}`);
+  // Auto-enable dictation after reading the question
+  setTimeout(() => {
+    dictationMode = true;
+    speakText('You can now dictate your answer. Say stop dictation when done.');
+  }, questionText.length * 100);
 }
 
 function readCurrentQuestion() {
@@ -204,6 +201,11 @@ function readCurrentQuestion() {
   }
   const text = currentQuestionElements[currentQuestionIndex]?.textContent || 'Unable to read the current question.';
   speakText(text);
+  // Auto-enable dictation after reading the question
+  setTimeout(() => {
+    dictationMode = true;
+    speakText('You can now dictate your answer. Say stop dictation when done.');
+  }, text.length * 100);
 }
 
 function handleVoiceCommand(command) {
@@ -396,6 +398,15 @@ async function loadTeacherDashboard() {
 }
 
 async function loadStudentDashboard() {
+  // Disable voice assistant when leaving exam
+  if (voiceAssistantActive) {
+    voiceAssistantActive = false;
+    stopRecognition();
+    dictationMode = false;
+    if (voiceToggle) voiceToggle.textContent = 'Voice Assist';
+    setVoiceStatus('Voice assistant inactive');
+  }
+  
   const exams = await loadStudentExams();
   renderStudentExamTable(exams);
   showSection('student');
@@ -564,6 +575,15 @@ async function openStudentExam(examId) {
 
   document.getElementById('student-answer').value = submission?.answer || '';
   showSection('examDetail');
+  
+  // Auto-enable voice assistant for students in exam mode
+  if (!voiceAssistantActive && speechRecognitionSupported) {
+    voiceAssistantActive = true;
+    startRecognition();
+    if (voiceToggle) voiceToggle.textContent = 'Stop Voice';
+    setVoiceStatus('Voice assistant active');
+    speakText('Voice assistant activated. You can navigate questions by saying next question, previous question, or read question. Say dictate answer to start speaking your answer.');
+  }
 }
 
 async function handleCreateExam(event) {
