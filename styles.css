@@ -263,7 +263,7 @@ textarea {
 }
 
 .stat-label {
-  color: rgba(255, 255, 255, 0.76);
+  color: #000000;
   margin: 0;
   text-transform: uppercase;
   letter-spacing: 1px;
