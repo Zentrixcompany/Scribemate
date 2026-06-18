@@ -255,18 +255,27 @@ textarea {
   padding: 28px 32px;
 }
 
+.card h3 {
+  margin: 0 0 12px 0;
+  font-size: 1.2rem;
+  color: var(--primary);
+  font-weight: 700;
+}
+
 .stat-label {
-  color: var(--text-secondary);
+  color: rgba(255, 255, 255, 0.76);
   margin: 0;
   text-transform: uppercase;
   letter-spacing: 1px;
-  font-size: 0.8rem;
-  font-weight: 600;
+  font-size: 0.75rem;
+  font-weight: 700;
+  display: block;
+  margin-bottom: 8px;
 }
 
 strong {
   display: block;
-  font-size: 2.4rem;
+  font-size: 2.8rem;
   color: var(--primary);
   font-weight: 700;
 }
