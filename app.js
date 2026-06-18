@@ -6,15 +6,24 @@ const sections = {
   examDetail: document.getElementById('section-exam-detail'),
 };
 const navLogin = document.getElementById('nav-login');
-const navRegister = document.getElementById('nav-register');
 const navDashboard = document.getElementById('nav-dashboard');
 const navLogout = document.getElementById('nav-logout');
+const voiceToggle = document.getElementById('voice-toggle');
+const voiceStatus = document.getElementById('voice-status');
 const toast = document.getElementById('toast');
 let currentProfile = null;
 let currentExam = null;
+let currentQuestionIndex = 0;
+let currentQuestionElements = [];
+let voiceAssistantActive = false;
+let dictationMode = false;
+let speechRecognition = null;
+let speechRecognitionSupported = false;
+let speechSynthesisSupported = 'speechSynthesis' in window;
 
 async function init() {
   bindEvents();
+  initVoiceAssistant();
   const { data: { session } } = await supabaseClient.auth.getSession();
   if (session?.user) {
     await loadProfile(session.user.id);
@@ -25,12 +34,14 @@ async function init() {
 
 function bindEvents() {
   navLogin.addEventListener('click', () => showSection('auth'));
-  navRegister.addEventListener('click', () => showSection('auth'));
   navDashboard.addEventListener('click', () => {
     if (currentProfile?.role === 'teacher') loadTeacherDashboard();
     else if (currentProfile?.role === 'student') loadStudentDashboard();
   });
   navLogout.addEventListener('click', logout);
+  if (voiceToggle) {
+    voiceToggle.addEventListener('click', toggleVoiceAssistant);
+  }
 
   document.getElementById('form-login').addEventListener('submit', handleLogin);
   document.getElementById('form-register').addEventListener('submit', handleRegister);
@@ -44,15 +55,197 @@ function showSection(name) {
   Object.values(sections).forEach((section) => section.classList.add('hidden'));
   sections[name].classList.remove('hidden');
   navLogin.classList.toggle('hidden', !!currentProfile);
-  navRegister.classList.toggle('hidden', !!currentProfile);
   navDashboard.classList.toggle('hidden', !currentProfile);
   navLogout.classList.toggle('hidden', !currentProfile);
+  updateVoiceInterface();
 }
 
 function showToast(message) {
   toast.textContent = message;
   toast.classList.remove('hidden');
   setTimeout(() => toast.classList.add('hidden'), 3600);
+}
+
+function updateVoiceInterface() {
+  if (!voiceToggle || !voiceStatus) return;
+  const visible = !!currentProfile && speechRecognitionSupported;
+  voiceToggle.classList.toggle('hidden', !visible);
+  if (!visible) {
+    voiceStatus.classList.add('hidden');
+    voiceAssistantActive = false;
+  }
+}
+
+function setVoiceStatus(text) {
+  if (!voiceStatus) return;
+  voiceStatus.textContent = text;
+  voiceStatus.classList.remove('hidden');
+}
+
+const wakeWords = ['scribe', 'assistant', 'hey scribe', 'ok scribe'];
+
+function initVoiceAssistant() {
+  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  speechRecognitionSupported = Boolean(SpeechRecognition);
+  if (!speechRecognitionSupported) return;
+
+  speechRecognition = new SpeechRecognition();
+  speechRecognition.lang = 'en-US';
+  speechRecognition.continuous = true;
+  speechRecognition.interimResults = false;
+  speechRecognition.maxAlternatives = 1;
+
+  speechRecognition.addEventListener('result', (event) => {
+    const transcript = event.results[event.results.length - 1][0].transcript.trim();
+    const normalized = transcript.toLowerCase();
+
+    const hasWakeWord = wakeWords.some((word) => normalized.startsWith(word));
+    const hasCommandKeyword = /\b(help|next|previous|back|read|submit|clear|dictate|write|stop|skip)\b/i.test(normalized);
+
+    if (!dictationMode) {
+      if (!hasWakeWord && !hasCommandKeyword) {
+        return;
+      }
+      if (!hasWakeWord && hasCommandKeyword) {
+        // Ignore passive classroom noise unless a wake word is used.
+        return;
+      }
+    }
+
+    if (dictationMode && !hasWakeWord && !hasCommandKeyword) {
+      const answerField = document.getElementById('student-answer');
+      if (answerField) {
+        answerField.value = `${answerField.value}${answerField.value ? ' ' : ''}${transcript}`;
+        speakText('Dictation text added.');
+      }
+      return;
+    }
+
+    const cleaned = normalized.replace(new RegExp(`^(?:${wakeWords.join('|')})\s*`, 'i'), '').trim();
+    handleVoiceCommand(cleaned);
+  });
+
+  speechRecognition.addEventListener('end', () => {
+    if (voiceAssistantActive) {
+      startRecognition();
+    }
+  });
+
+  speechRecognition.addEventListener('error', (event) => {
+    showToast('Voice assistant error: ' + event.error);
+  });
+}
+
+function toggleVoiceAssistant() {
+  if (!speechRecognitionSupported) {
+    showToast('Voice commands are not supported in this browser.');
+    return;
+  }
+  voiceAssistantActive = !voiceAssistantActive;
+  dictationMode = false;
+  if (voiceAssistantActive) {
+    startRecognition();
+    if (voiceToggle) voiceToggle.textContent = 'Stop Voice';
+    setVoiceStatus('Voice assistant active');
+    speakText('Voice assistant activated. Say Scribe before each command. Available commands include next question, skip question, previous question, read question, submit exam, clear answer, dictate answer, stop dictation, or help.');
+  } else {
+    stopRecognition();
+    if (voiceToggle) voiceToggle.textContent = 'Voice Assist';
+    setVoiceStatus('Voice assistant inactive');
+  }
+}
+
+function startRecognition() {
+  if (!speechRecognition) return;
+  try {
+    speechRecognition.start();
+  } catch (err) {
+    console.warn('Speech recognition start error', err);
+  }
+}
+
+function stopRecognition() {
+  if (!speechRecognition) return;
+  try {
+    speechRecognition.stop();
+  } catch (err) {
+    console.warn('Speech recognition stop error', err);
+  }
+}
+
+function speakText(text) {
+  if (!speechSynthesisSupported) return;
+  const utterance = new SpeechSynthesisUtterance(text);
+  utterance.rate = 0.95;
+  utterance.pitch = 1.0;
+  window.speechSynthesis.cancel();
+  window.speechSynthesis.speak(utterance);
+}
+
+function goToQuestion(index) {
+  if (!currentQuestionElements.length) {
+    speakText('No questions available to navigate.');
+    return;
+  }
+  if (index < 0) index = 0;
+  if (index >= currentQuestionElements.length) index = currentQuestionElements.length - 1;
+  currentQuestionIndex = index;
+  currentQuestionElements.forEach((element, idx) => {
+    element.style.background = idx === currentQuestionIndex ? 'rgba(208, 188, 119, 0.16)' : 'transparent';
+  });
+  const questionText = currentQuestionElements[currentQuestionIndex]?.textContent || 'Unable to read the current question.';
+  speakText(`Question ${currentQuestionIndex + 1}: ${questionText}`);
+}
+
+function readCurrentQuestion() {
+  if (!currentQuestionElements.length) {
+    speakText('No questions available to read.');
+    return;
+  }
+  const text = currentQuestionElements[currentQuestionIndex]?.textContent || 'Unable to read the current question.';
+  speakText(text);
+}
+
+function handleVoiceCommand(command) {
+  if (command.includes('help')) {
+    speakText('Available commands are next question, skip question, previous question, read question, submit exam, clear answer, dictate answer, stop dictation, and help.');
+    return;
+  }
+  if (command.includes('submit')) {
+    const form = document.getElementById('form-submit-answer');
+    if (form) form.requestSubmit?.();
+    speakText('Exam submission requested.');
+    return;
+  }
+  if (command.includes('stop dictation') || command.includes('stop writing')) {
+    dictationMode = false;
+    speakText('Dictation mode stopped.');
+    return;
+  }
+  if (command.includes('dictate answer') || command.includes('start dictation') || command.includes('write answer') || command.includes('dictate')) {
+    dictationMode = true;
+    speakText('Dictation mode enabled. Speak your answer directly and say stop dictation when finished.');
+    return;
+  }
+  if (command.includes('next') || command.includes('skip')) {
+    goToQuestion(currentQuestionIndex + 1);
+    return;
+  }
+  if (command.includes('previous') || command.includes('back')) {
+    goToQuestion(currentQuestionIndex - 1);
+    return;
+  }
+  if (command.includes('read') || command.includes('question')) {
+    readCurrentQuestion();
+    return;
+  }
+  if (command.includes('clear')) {
+    const answerField = document.getElementById('student-answer');
+    if (answerField) answerField.value = '';
+    speakText('Answer cleared.');
+    return;
+  }
+  speakText('Voice command not recognized. Say help for available commands.');
 }
 
 async function getCurrentUser() {
@@ -344,9 +537,13 @@ async function openStudentExam(examId) {
     questionsList.innerHTML = questions
       .map((q) => `<li>${escapeHtml(q)}</li>`)
       .join('');
+    currentQuestionElements = Array.from(questionsList.children);
+    currentQuestionIndex = 0;
+    goToQuestion(0);
   } else {
     questionsInfo.style.display = 'block';
     questionsList.style.display = 'none';
+    currentQuestionElements = [];
     if (exam.questions_file_url && exam.questions_file_name) {
       questionsFileLink.style.display = 'block';
       questionsFileLink.innerHTML = `
@@ -483,6 +680,16 @@ async function handleCreateStudent(event) {
     showToast('Unable to save student profile. Please verify the student account was created in Supabase.');
     return;
   }
+
+  const teacherExams = await loadTeacherExams();
+  await Promise.all(
+    teacherExams
+      .filter((exam) => !Array.isArray(exam.assigned_student_ids) || !exam.assigned_student_ids.includes(studentId))
+      .map((exam) => {
+        const assigned = Array.isArray(exam.assigned_student_ids) ? [...exam.assigned_student_ids, studentId] : [studentId];
+        return supabaseClient.from('exams').update({ assigned_student_ids: assigned }).eq('id', exam.id);
+      })
+  );
 
   const activeUser = await getCurrentUser();
   if (signup.data.session && activeUser?.id === studentId) {

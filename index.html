@@ -14,19 +14,20 @@
   <div class="app-shell">
     <header class="app-header">
       <div class="brand-panel">
-        <div class="brand-badge">🎓 Scribe Exam Management System</div>
+        <div class="brand-badge">Scribe Exam Management System</div>
         <h1>Scribe Examination Platform</h1>
-        <p class="subtitle">A secure, accessible examination platform designed for educational institutions. Teachers control student access; students take exams in a managed professional portal.</p>
+        <p class="subtitle">A secure, accessible examination platform for educational institutions. Teachers control student access; students take exams in a managed professional portal.</p>
         <div class="hero-badges">
-          <span>📄 Questions via Upload</span>
-          <span>🔐 Teacher-Controlled Credentials</span>
-          <span>📊 Professional Exam Portal</span>
+          <span>Questions via upload</span>
+          <span>Teacher-controlled credentials</span>
+          <span>Accessible exam workflow</span>
         </div>
       </div>
       <nav class="top-nav">
         <button id="nav-login">Sign In</button>
-        <button id="nav-register">Register</button>
         <button id="nav-dashboard" class="hidden">Dashboard</button>
+        <button id="voice-toggle" class="button button-secondary hidden">Voice Assist</button>
+        <span id="voice-status" class="voice-status hidden">Voice assistant inactive</span>
         <button id="nav-logout" class="hidden">Sign Out</button>
       </nav>
     </header>
@@ -146,7 +147,7 @@
 
       <section id="section-student" class="panel hidden">
         <h2 style="color: var(--primary); margin-bottom: 32px; font-size: 1.8rem;">Student Portal</h2>
-        <p class="subtitle">The student portal mirrors the teacher portal in structure and professionalism. Students review assigned exams, download uploaded question files as needed, and write exam responses directly in the portal.</p>
+        <p class="subtitle">Students can open assigned exams and write their exam responses directly in the portal.</p>
         <p class="subtitle" style="margin-top: 8px;">Students sign in with credentials issued by their teacher only; students cannot self-register.</p>
 
         <div class="stats-grid">
@@ -164,7 +165,7 @@
           </div>
         </div>
 
-        <p class="subtitle">Students can open assigned exams, review uploaded question files, and write their exam responses directly in the student portal.</p>
+        <p class="subtitle">Students can open assigned exams and write their exam responses directly in the portal.</p>
         <div class="section-block">
           <h3>Assigned Examinations</h3>
           <table class="data-table" id="student-exam-table">
@@ -177,14 +178,18 @@
       </section>
 
       <section id="section-exam-detail" class="panel hidden">
-        <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 32px;">
+        <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 24px; gap: 20px; flex-wrap: wrap;">
           <div>
             <h2 id="exam-detail-title" style="color: var(--primary); margin: 0 0 12px 0; font-size: 1.8rem;"></h2>
             <p id="exam-detail-description" class="subtitle"></p>
           </div>
           <button id="back-to-student" class="button button-secondary">← Back to Exams</button>
         </div>
-
+        <div class="voice-panel">
+          <div class="voice-help">
+            <strong>Voice controls available:</strong> say "Scribe" before commands; commands include next question, previous question, read question, submit exam, clear answer, dictate answer, stop dictation, help.
+          </div>
+        </div>
         <div class="section-block">
           <h3>Exam Questions</h3>
           <div id="exam-detail-questions" style="padding: 20px; background: rgba(212, 175, 55, 0.08); border: 1px solid var(--border-color); border-radius: 12px; margin-bottom: 24px;">
