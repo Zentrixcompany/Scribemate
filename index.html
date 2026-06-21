@@ -3,8 +3,8 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <meta name="description" content="Scribemate - Professional Exam Management Platform" />
-  <title>Scribemate | Premium Exam Management</title>
+  <meta name="description" content="Scribe Exam Management System - Government-grade exam platform for teachers and students" />
+  <title>Scribe Exam Management System</title>
   <link rel="stylesheet" href="styles.css" />
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
   <script src="config.js"></script>
@@ -14,19 +14,20 @@
   <div class="app-shell">
     <header class="app-header">
       <div class="brand-panel">
-        <div class="brand-badge">🎓 Scribe Exam Management System</div>
-        <h1>Government-Grade Examination Platform</h1>
-        <p class="subtitle">A secure, accessible examination platform designed for educational institutions. Teachers control student access; students take exams in a professional environment.</p>
+        <div class="brand-badge">Scribe Exam Management System</div>
+        <h1>Scribe Examination Platform</h1>
+        <p class="subtitle">A secure, accessible examination platform for educational institutions. Teachers control student access; students take exams in a managed professional portal.</p>
         <div class="hero-badges">
-          <span>📄 File-Based Questions</span>
-          <span>🔐 Credential Management</span>
-          <span>📊 Full Exam Control</span>
+          <span>Questions via upload</span>
+          <span>Teacher-controlled credentials</span>
+          <span>Accessible exam workflow</span>
         </div>
       </div>
       <nav class="top-nav">
         <button id="nav-login">Sign In</button>
-        <button id="nav-register">Register</button>
         <button id="nav-dashboard" class="hidden">Dashboard</button>
+        <button id="voice-toggle" class="button button-secondary hidden">Voice Assist</button>
+        <span id="voice-status" class="voice-status hidden">Voice assistant inactive</span>
         <button id="nav-logout" class="hidden">Sign Out</button>
       </nav>
     </header>
@@ -35,7 +36,8 @@
       <section id="section-auth" class="panel">
         <div class="auth-layout">
           <div class="auth-card">
-            <h2 style="color: var(--primary); margin-bottom: 24px; font-size: 1.4rem;">Educator Login</h2>
+            <h2 style="color: var(--primary); margin-bottom: 16px; font-size: 1.4rem;">Educator & Student Login</h2>
+            <p class="subtitle" style="margin-bottom: 18px;">Teachers and students sign in with the same secure portal. Students use credentials issued by their teacher only.</p>
             <form id="form-login" class="form-grid">
               <label for="login-email">Email Address</label>
               <input id="login-email" type="email" placeholder="your@email.com" required />
@@ -48,7 +50,7 @@
           </div>
 
           <div class="auth-card">
-            <h2 style="color: var(--primary); margin-bottom: 24px; font-size: 1.4rem;">Create Account</h2>
+            <h2 style="color: var(--primary); margin-bottom: 24px; font-size: 1.4rem;">Teacher Registration (Educators Only)</h2>
             <form id="form-register" class="form-grid">
               <label for="register-name">Full Name</label>
               <input id="register-name" type="text" placeholder="John Educator" required />
@@ -59,6 +61,7 @@
               <label for="register-password">Password</label>
               <input id="register-password" type="password" placeholder="••••••••" required />
 
+              <small style="color: var(--text-secondary);">Only teachers may create teacher and student accounts. Student login credentials are created and shared by teachers only.</small>
               <button type="submit" class="button button-primary" style="margin-top: 12px;">Create Account</button>
             </form>
           </div>
@@ -143,7 +146,9 @@
       </section>
 
       <section id="section-student" class="panel hidden">
-        <h2 style="color: var(--primary); margin-bottom: 32px; font-size: 1.8rem;">Student Examination Portal</h2>
+        <h2 style="color: var(--primary); margin-bottom: 32px; font-size: 1.8rem;">Student Portal</h2>
+        <p class="subtitle">Students can open assigned exams and write their exam responses directly in the portal.</p>
+        <p class="subtitle" style="margin-top: 8px;">Students sign in with credentials issued by their teacher only; students cannot self-register.</p>
 
         <div class="stats-grid">
           <div class="card">
@@ -160,6 +165,7 @@
           </div>
         </div>
 
+        <p class="subtitle">Students can open assigned exams and write their exam responses directly in the portal.</p>
         <div class="section-block">
           <h3>Assigned Examinations</h3>
           <table class="data-table" id="student-exam-table">
@@ -172,18 +178,30 @@
       </section>
 
       <section id="section-exam-detail" class="panel hidden">
-        <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 32px;">
+        <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 24px; gap: 20px; flex-wrap: wrap;">
           <div>
             <h2 id="exam-detail-title" style="color: var(--primary); margin: 0 0 12px 0; font-size: 1.8rem;"></h2>
             <p id="exam-detail-description" class="subtitle"></p>
           </div>
           <button id="back-to-student" class="button button-secondary">← Back to Exams</button>
         </div>
-
+        <div class="voice-panel">
+          <div class="voice-help">
+            <strong>Voice controls available:</strong> say "Scribe" before commands; commands include next question, previous question, read question, submit exam, clear answer, dictate answer, stop dictation, help.
+          </div>
+          <div id="mic-activity" class="mic-activity" aria-hidden="false" aria-live="polite" title="Microphone activity">
+            <div class="mic-label">Mic</div>
+            <div class="mic-bar">
+              <div id="mic-level" class="mic-level" style="width:0%"></div>
+            </div>
+            <div id="mic-status" class="mic-status">Idle</div>
+          </div>
+        </div>
         <div class="section-block">
           <h3>Exam Questions</h3>
           <div id="exam-detail-questions" style="padding: 20px; background: rgba(212, 175, 55, 0.08); border: 1px solid var(--border-color); border-radius: 12px; margin-bottom: 24px;">
             <p id="exam-questions-info" style="color: var(--text-secondary); margin: 0; line-height: 1.6;">Questions will be displayed below. Read all questions carefully before starting your response.</p>
+            <div id="exam-questions-file-link" style="display: none; margin: 16px 0;"></div>
             <ol id="exam-questions-list" class="question-list" style="display: none;"></ol>
           </div>
         </div>

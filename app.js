@@ -6,31 +6,47 @@ const sections = {
   examDetail: document.getElementById('section-exam-detail'),
 };
 const navLogin = document.getElementById('nav-login');
-const navRegister = document.getElementById('nav-register');
 const navDashboard = document.getElementById('nav-dashboard');
 const navLogout = document.getElementById('nav-logout');
+const voiceToggle = document.getElementById('voice-toggle');
+const voiceStatus = document.getElementById('voice-status');
 const toast = document.getElementById('toast');
 let currentProfile = null;
 let currentExam = null;
+let currentQuestionIndex = 0;
+let currentQuestionElements = [];
+let voiceAssistantActive = false;
+let dictationMode = false;
+let speechRecognition = null;
+let speechRecognitionSupported = false;
+let speechSynthesisSupported = 'speechSynthesis' in window;
+let audioContext = null;
+let analyser = null;
+let micStream = null;
+let micRaf = null;
+let committedAnswer = '';
+let isRecognizing = false;
+let commitTimer = null;
+const COMMIT_DELAY = 1200; // ms: commit interim text after short silence
 
 async function init() {
   bindEvents();
-  const { data: { session } } = await supabaseClient.auth.getSession();
-  if (session?.user) {
-    await loadProfile(session.user.id);
-    return;
-  }
+  initVoiceAssistant();
+  // Auto signout on page refresh
+  await supabaseClient.auth.signOut();
   showSection('auth');
 }
 
 function bindEvents() {
   navLogin.addEventListener('click', () => showSection('auth'));
-  navRegister.addEventListener('click', () => showSection('auth'));
   navDashboard.addEventListener('click', () => {
     if (currentProfile?.role === 'teacher') loadTeacherDashboard();
     else if (currentProfile?.role === 'student') loadStudentDashboard();
   });
   navLogout.addEventListener('click', logout);
+  if (voiceToggle) {
+    voiceToggle.addEventListener('click', toggleVoiceAssistant);
+  }
 
   document.getElementById('form-login').addEventListener('submit', handleLogin);
   document.getElementById('form-register').addEventListener('submit', handleRegister);
@@ -44,15 +60,346 @@ function showSection(name) {
   Object.values(sections).forEach((section) => section.classList.add('hidden'));
   sections[name].classList.remove('hidden');
   navLogin.classList.toggle('hidden', !!currentProfile);
-  navRegister.classList.toggle('hidden', !!currentProfile);
   navDashboard.classList.toggle('hidden', !currentProfile);
   navLogout.classList.toggle('hidden', !currentProfile);
+  updateVoiceInterface();
 }
 
 function showToast(message) {
   toast.textContent = message;
   toast.classList.remove('hidden');
   setTimeout(() => toast.classList.add('hidden'), 3600);
+}
+
+function updateVoiceInterface() {
+  if (!voiceToggle || !voiceStatus) return;
+  const visible = !!currentProfile && speechRecognitionSupported;
+  voiceToggle.classList.toggle('hidden', !visible);
+  if (!visible) {
+    voiceStatus.classList.add('hidden');
+    voiceAssistantActive = false;
+  }
+}
+
+function setVoiceStatus(text) {
+  if (!voiceStatus) return;
+  voiceStatus.textContent = text;
+  voiceStatus.classList.remove('hidden');
+}
+
+const wakeWords = ['scribe', 'assistant', 'hey scribe', 'ok scribe'];
+
+function initVoiceAssistant() {
+  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  speechRecognitionSupported = Boolean(SpeechRecognition);
+  if (!speechRecognitionSupported) return;
+
+  speechRecognition = new SpeechRecognition();
+  speechRecognition.lang = 'en-US';
+  speechRecognition.continuous = true;
+  speechRecognition.interimResults = true;
+  speechRecognition.maxAlternatives = 1;
+
+  speechRecognition.addEventListener('result', (event) => {
+    let transcript = '';
+    
+    // Get interim results for faster response
+    for (let i = event.resultIndex; i < event.results.length; i++) {
+      transcript += event.results[i][0].transcript;
+    }
+    
+    transcript = transcript.trim();
+    if (!transcript) return;
+    
+    const normalized = transcript.toLowerCase();
+
+    const hasWakeWord = wakeWords.some((word) => normalized.startsWith(word));
+    const hasCommandKeyword = /\b(help|next|previous|back|read|submit|clear|dictate|write|stop|skip)\b/i.test(normalized);
+
+    // Check for commands first, regardless of dictation mode
+    if (hasCommandKeyword) {
+      const cleaned = normalized.replace(new RegExp(`^(?:${wakeWords.join('|')})\s*`, 'i'), '').trim();
+      handleVoiceCommand(cleaned);
+      return;
+    }
+
+    // In dictation mode, show interim text immediately and commit on final or short silence
+    if (dictationMode) {
+      // Filter out our own assistant phrases so 'dictation mode enabled' is not recorded
+      const assistantPhrasePattern = /\b(dictation mode enabled|voice assistant activated|you can now dictate your answer|voice assistant active|available commands|say help)\b/i;
+      if (assistantPhrasePattern.test(normalized)) {
+        return;
+      }
+
+      const answerField = document.getElementById('student-answer');
+      const lastResult = event.results[event.results.length - 1];
+      const interimText = transcript;
+      if (answerField) {
+        // Show interim (merged with previously committed text)
+        answerField.value = `${committedAnswer}${committedAnswer ? ' ' : ''}${interimText}`.trim();
+      }
+
+      // If final result from engine, commit immediately
+      if (lastResult.isFinal) {
+        committedAnswer = `${committedAnswer}${committedAnswer ? ' ' : ''}${interimText}`.trim();
+        if (answerField) answerField.value = committedAnswer;
+        if (commitTimer) { clearTimeout(commitTimer); commitTimer = null; }
+        return;
+      }
+
+      // Otherwise, reset the commit timer so short pauses commit interim quickly
+      if (commitTimer) clearTimeout(commitTimer);
+      commitTimer = setTimeout(() => {
+        committedAnswer = `${committedAnswer}${committedAnswer ? ' ' : ''}${interimText}`.trim();
+        if (answerField) answerField.value = committedAnswer;
+        commitTimer = null;
+      }, COMMIT_DELAY);
+      return;
+    }
+  });
+
+  speechRecognition.addEventListener('end', () => {
+    // mark recognizing false; restart if assistant still active
+    isRecognizing = false;
+    if (voiceAssistantActive) {
+      try {
+        startRecognition();
+      } catch (err) {
+        console.warn('Recognition restart error', err);
+      }
+    }
+  });
+
+  speechRecognition.addEventListener('start', () => {
+    isRecognizing = true;
+  });
+
+  speechRecognition.addEventListener('error', (event) => {
+    if (event.error !== 'no-speech' && event.error !== 'audio-capture') {
+      showToast('Voice error: ' + event.error);
+    }
+  });
+}
+
+function toggleVoiceAssistant() {
+  if (!speechRecognitionSupported) {
+    showToast('Voice commands are not supported in this browser.');
+    return;
+  }
+  voiceAssistantActive = !voiceAssistantActive;
+  dictationMode = false;
+  if (voiceAssistantActive) {
+    startRecognition();
+    if (voiceToggle) voiceToggle.textContent = 'Stop Voice';
+    setVoiceStatus('Voice assistant active');
+    speakText('Voice assistant activated. Say Scribe before each command. Available commands include next question, skip question, previous question, read question, submit exam, clear answer, dictate answer, stop dictation, or help.');
+  } else {
+    stopRecognition();
+    if (voiceToggle) voiceToggle.textContent = 'Voice Assist';
+    setVoiceStatus('Voice assistant inactive');
+  }
+}
+
+function startRecognition() {
+  if (!speechRecognition) return;
+  try {
+    if (isRecognizing) return;
+    isRecognizing = true;
+    speechRecognition.start();
+    // Start microphone level meter
+    startMicMeter();
+  } catch (err) {
+    console.warn('Speech recognition start error', err);
+    isRecognizing = false;
+  }
+}
+
+function stopRecognition() {
+  if (!speechRecognition) return;
+  try {
+    if (!isRecognizing) return;
+    isRecognizing = false;
+    speechRecognition.stop();
+    // Stop microphone level meter
+    stopMicMeter();
+  } catch (err) {
+    console.warn('Speech recognition stop error', err);
+  }
+}
+
+function startMicMeter() {
+  // If already running, skip
+  if (micStream || micRaf) return;
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) return;
+  navigator.mediaDevices.getUserMedia({ audio: true }).then((stream) => {
+    micStream = stream;
+    audioContext = audioContext || new (window.AudioContext || window.webkitAudioContext)();
+    const source = audioContext.createMediaStreamSource(stream);
+    analyser = audioContext.createAnalyser();
+    analyser.fftSize = 64; // even smaller for lower latency
+    analyser.smoothingTimeConstant = 0.05; // more responsive to sudden sound
+    source.connect(analyser);
+    const dataArray = new Uint8Array(analyser.fftSize);
+    const levelEl = document.getElementById('mic-level');
+    const statusEl = document.getElementById('mic-status');
+    function update() {
+      if (!analyser) return;
+      analyser.getByteTimeDomainData(dataArray);
+      let sum = 0;
+      for (let i = 0; i < dataArray.length; i++) {
+        const v = dataArray[i] - 128;
+        sum += v * v;
+      }
+      const rms = Math.sqrt(sum / dataArray.length) / 128;
+      // increase sensitivity multiplier
+      const percent = Math.min(100, Math.max(0, Math.round(rms * 1200)));
+      if (levelEl) levelEl.style.width = percent + '%';
+      if (statusEl) statusEl.textContent = percent > 4 ? 'Detecting' : 'Idle';
+      // Auto-enable dictation for students in exam if sound detected
+      try {
+        const inExam = sections && sections.examDetail && !sections.examDetail.classList.contains('hidden');
+        if (percent > 12 && !dictationMode && currentProfile?.role === 'student' && inExam) {
+          dictationMode = true;
+          committedAnswer = (document.getElementById('student-answer')?.value || '');
+          if (statusEl) statusEl.textContent = 'Dictating';
+        }
+      } catch (e) {
+        // ignore
+      }
+      micRaf = requestAnimationFrame(update);
+    }
+    update();
+  }).catch((err) => {
+    console.warn('Mic meter error', err);
+  });
+}
+
+function stopMicMeter() {
+  if (micRaf) {
+    cancelAnimationFrame(micRaf);
+    micRaf = null;
+  }
+  if (micStream) {
+    micStream.getTracks().forEach((t) => t.stop());
+    micStream = null;
+  }
+  if (audioContext) {
+    try { audioContext.close(); } catch (e) {}
+    audioContext = null;
+  }
+  const levelEl = document.getElementById('mic-level');
+  const statusEl = document.getElementById('mic-status');
+  if (levelEl) levelEl.style.width = '0%';
+  if (statusEl) statusEl.textContent = 'Idle';
+}
+
+// Prewarm microphone permission to avoid prompt/latency when starting recognition
+function prewarmMicPermission() {
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) return Promise.resolve();
+  return navigator.mediaDevices.getUserMedia({ audio: true }).then((stream) => {
+    // Immediately stop tracks but permission is granted for subsequent uses
+    try { stream.getTracks().forEach((t) => t.stop()); } catch (e) {}
+  }).catch((err) => {
+    console.warn('Prewarm mic permission failed', err);
+  });
+}
+
+function speakText(text) {
+  if (!speechSynthesisSupported) return;
+  // Temporarily pause recognition while assistant is speaking
+  const wasRecognizing = isRecognizing;
+  if (wasRecognizing) {
+    stopRecognition();
+  }
+
+  const utterance = new SpeechSynthesisUtterance(text);
+  utterance.rate = 0.95;
+  utterance.pitch = 1.0;
+
+  utterance.addEventListener('end', () => {
+    if (wasRecognizing && voiceAssistantActive) {
+      startRecognition();
+    }
+  });
+
+  window.speechSynthesis.cancel();
+  window.speechSynthesis.speak(utterance);
+}
+
+function goToQuestion(index) {
+  if (!currentQuestionElements.length) {
+    speakText('No questions available to navigate.');
+    return;
+  }
+  if (index < 0) index = 0;
+  if (index >= currentQuestionElements.length) index = currentQuestionElements.length - 1;
+  currentQuestionIndex = index;
+  currentQuestionElements.forEach((element, idx) => {
+    element.style.background = idx === currentQuestionIndex ? 'rgba(208, 188, 119, 0.16)' : 'transparent';
+  });
+  const questionText = currentQuestionElements[currentQuestionIndex]?.textContent || 'Unable to read the current question.';
+  speakText(`Question ${currentQuestionIndex + 1}: ${questionText}`);
+  // Auto-enable dictation after reading the question
+  setTimeout(() => {
+    dictationMode = true;
+    speakText('You can now dictate your answer. Say stop dictation when done.');
+  }, questionText.length * 100);
+}
+
+function readCurrentQuestion() {
+  if (!currentQuestionElements.length) {
+    speakText('No questions available to read.');
+    return;
+  }
+  const text = currentQuestionElements[currentQuestionIndex]?.textContent || 'Unable to read the current question.';
+  speakText(text);
+  // Auto-enable dictation after reading the question
+  setTimeout(() => {
+    dictationMode = true;
+    speakText('You can now dictate your answer. Say stop dictation when done.');
+  }, text.length * 100);
+}
+
+function handleVoiceCommand(command) {
+  if (command.includes('help')) {
+    speakText('Available commands are next question, skip question, previous question, read question, submit exam, clear answer, dictate answer, stop dictation, and help.');
+    return;
+  }
+  if (command.includes('submit')) {
+    const form = document.getElementById('form-submit-answer');
+    if (form) form.requestSubmit?.();
+    speakText('Exam submission requested.');
+    return;
+  }
+  if (command.includes('stop dictation') || command.includes('stop writing')) {
+    dictationMode = false;
+    speakText('Dictation mode stopped.');
+    return;
+  }
+  if (command.includes('dictate answer') || command.includes('start dictation') || command.includes('write answer') || command.includes('dictate')) {
+    dictationMode = true;
+    speakText('Dictation mode enabled. Speak your answer directly and say stop dictation when finished.');
+    return;
+  }
+  if (command.includes('next') || command.includes('skip')) {
+    goToQuestion(currentQuestionIndex + 1);
+    return;
+  }
+  if (command.includes('previous') || command.includes('back')) {
+    goToQuestion(currentQuestionIndex - 1);
+    return;
+  }
+  if (command.includes('read') || command.includes('question')) {
+    readCurrentQuestion();
+    return;
+  }
+  if (command.includes('clear')) {
+    const answerField = document.getElementById('student-answer');
+    if (answerField) answerField.value = '';
+    speakText('Answer cleared.');
+    return;
+  }
+  speakText('Voice command not recognized. Say help for available commands.');
 }
 
 async function getCurrentUser() {
@@ -166,7 +513,7 @@ async function ensureUserProfile(user) {
   const metadata = user.user_metadata || {};
   const profile = {
     id: user.id,
-    name: metadata.name || metadata.full_name || 'Scribemate user',
+    name: metadata.name || metadata.full_name || 'Scribe user',
     email: user.email,
     role: metadata.role || 'teacher',
     teacher_id: metadata.teacher_id || null,
@@ -203,6 +550,15 @@ async function loadTeacherDashboard() {
 }
 
 async function loadStudentDashboard() {
+  // Disable voice assistant when leaving exam
+  if (voiceAssistantActive) {
+    voiceAssistantActive = false;
+    stopRecognition();
+    dictationMode = false;
+    if (voiceToggle) voiceToggle.textContent = 'Voice Assist';
+    setVoiceStatus('Voice assistant inactive');
+  }
+  
   const exams = await loadStudentExams();
   renderStudentExamTable(exams);
   showSection('student');
@@ -328,22 +684,38 @@ async function openStudentExam(examId) {
   currentExam = exam;
   document.getElementById('exam-detail-title').textContent = exam.title;
   document.getElementById('exam-detail-description').textContent = exam.description || 'Instructions will appear here.';
-  
+
   const questionsInfo = document.getElementById('exam-questions-info');
   const questionsList = document.getElementById('exam-questions-list');
-  
-  if (exam.questions) {
+  const questionsFileLink = document.getElementById('exam-questions-file-link');
+
+  const questions = Array.isArray(exam.questions)
+    ? exam.questions
+    : String(exam.questions || '').split('\n').map((q) => q.trim()).filter(Boolean);
+
+  if (questions.length) {
     questionsInfo.style.display = 'none';
+    questionsFileLink.style.display = 'none';
     questionsList.style.display = 'block';
-    questionsList.innerHTML = exam.questions
-      .split('\n')
-      .map((q) => q.trim())
-      .filter(Boolean)
+    questionsList.innerHTML = questions
       .map((q) => `<li>${escapeHtml(q)}</li>`)
       .join('');
+    currentQuestionElements = Array.from(questionsList.children);
+    currentQuestionIndex = 0;
+    goToQuestion(0);
   } else {
     questionsInfo.style.display = 'block';
     questionsList.style.display = 'none';
+    currentQuestionElements = [];
+    if (exam.questions_file_url && exam.questions_file_name) {
+      questionsFileLink.style.display = 'block';
+      questionsFileLink.innerHTML = `
+        <strong>Questions file:</strong> <a href="${escapeHtml(exam.questions_file_url)}" target="_blank" rel="noreferrer noopener">${escapeHtml(exam.questions_file_name)}</a>
+        <div style="margin-top: 8px; color: var(--text-secondary);">Open the uploaded questions file to read the exam content.</div>
+      `;
+    } else {
+      questionsFileLink.style.display = 'none';
+    }
   }
 
   const { data: submission } = await supabaseClient
@@ -353,8 +725,22 @@ async function openStudentExam(examId) {
     .eq('student_id', currentProfile.id)
     .single();
 
-  document.getElementById('student-answer').value = submission?.answer || '';
+  // Maintain committedAnswer separately so we can show interim text quickly
+  committedAnswer = submission?.answer || '';
+  const answerFieldEl = document.getElementById('student-answer');
+  if (answerFieldEl) answerFieldEl.value = committedAnswer;
   showSection('examDetail');
+  
+  // Auto-enable voice assistant for students in exam mode
+  if (!voiceAssistantActive && speechRecognitionSupported) {
+    voiceAssistantActive = true;
+    // Prewarm mic permission to avoid prompt latency
+    await prewarmMicPermission();
+    startRecognition();
+    if (voiceToggle) voiceToggle.textContent = 'Stop Voice';
+    setVoiceStatus('Voice assistant active');
+    speakText('Voice assistant activated. You can navigate questions by saying next question, previous question, or read question. Say dictate answer to start speaking your answer.');
+  }
 }
 
 async function handleCreateExam(event) {
@@ -373,34 +759,50 @@ async function handleCreateExam(event) {
     return;
   }
 
-  let questionsText = '';
-  try {
-    questionsText = await questionsFile.text();
-  } catch (err) {
-    showToast('Unable to read file. Please use a text-based format (TXT, PDF text, or DOC).');
+  const examId = crypto.randomUUID();
+  const filePath = `exams/${examId}/${questionsFile.name}`;
+  // Create 'exams' bucket in Supabase Storage if it doesn't exist
+  const { error: uploadError } = await supabaseClient.storage.from('exams').upload(filePath, questionsFile, { cacheControl: '3600', upsert: true });
+  if (uploadError) {
+    console.error('Storage upload error:', uploadError);
+    showToast('Unable to upload the questions file. Check your Supabase storage settings.');
     return;
   }
 
-  if (!questionsText.trim()) {
-    showToast('Questions file appears to be empty.');
-    return;
+  const publicUrlResult = supabaseClient.storage.from('exams').getPublicUrl(filePath);
+  const questionsFileUrl = publicUrlResult?.data?.publicUrl || null;
+
+  let questionsArray = [];
+  if (questionsFile.type === 'text/plain' || questionsFile.name.toLowerCase().endsWith('.txt')) {
+    try {
+      const questionsText = await questionsFile.text();
+      questionsArray = questionsText
+        .split('\n')
+        .map((q) => q.trim())
+        .filter(Boolean);
+    } catch (err) {
+      console.warn('Unable to extract text from questions file:', err);
+    }
   }
 
   const students = await loadTeacherStudents();
   const { error } = await supabaseClient.from('exams').insert([
     {
-      id: crypto.randomUUID(),
+      id: examId,
       title,
       description,
-      questions: questionsText,
+      questions: questionsArray,
+      questions_file_name: questionsFile.name,
+      questions_file_path: filePath,
+      questions_file_url: questionsFileUrl,
       teacher_id: currentProfile.id,
       assigned_student_ids: students.map((student) => student.id),
-      created_at: new Date().toISOString(),
     },
   ]);
 
   if (error) {
-    showToast('Unable to create exam.');
+    console.error('Exam insert error:', error);
+    showToast(error.message || 'Unable to create exam.');
     return;
   }
 
@@ -441,9 +843,7 @@ async function handleCreateStudent(event) {
     return;
   }
 
-  const activeUser = await getCurrentUser();
-  if (signup.data.session && activeUser?.id === studentId) {
-    const profileResult = await supabaseClient.from('profiles').insert([
+  const profileResult = await supabaseClient.from('profiles').insert([
       {
         id: studentId,
         name,
@@ -453,11 +853,24 @@ async function handleCreateStudent(event) {
       },
     ]);
 
-    if (profileResult.error) {
-      showToast('Unable to save student profile.');
-      return;
-    }
+  if (profileResult.error) {
+    console.error('Student profile insert error:', profileResult.error);
+    showToast('Unable to save student profile. Please verify the student account was created in Supabase.');
+    return;
+  }
 
+  const teacherExams = await loadTeacherExams();
+  await Promise.all(
+    teacherExams
+      .filter((exam) => !Array.isArray(exam.assigned_student_ids) || !exam.assigned_student_ids.includes(studentId))
+      .map((exam) => {
+        const assigned = Array.isArray(exam.assigned_student_ids) ? [...exam.assigned_student_ids, studentId] : [studentId];
+        return supabaseClient.from('exams').update({ assigned_student_ids: assigned }).eq('id', exam.id);
+      })
+  );
+
+  const activeUser = await getCurrentUser();
+  if (signup.data.session && activeUser?.id === studentId) {
     await supabaseClient.auth.signOut();
     const reLogin = await supabaseClient.auth.signInWithPassword({ email: teacherEmail, password: teacherPassword });
     if (reLogin.error) {

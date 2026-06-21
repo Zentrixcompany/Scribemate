@@ -1,16 +1,16 @@
 # Scribe Exam Management System
 
-Scribe is a government-grade examination platform for educational institutions. Teachers create exams and manage student credentials; students take exams in a secure, professional environment with full question visibility and response submission.
+Scribe is a government-grade examination platform for educational institutions. Teachers create exams, upload question files, and manage student login credentials; students take exams in a secure, professional portal with question display and written response submission.
 
 ## Features
 - **Teacher Registration & Dashboard:** Teachers register and manage their institution's exams
-- **Student Enrollment:** Teachers create student accounts and provide credentials
-- **File-Based Exam Questions:** Upload exam questions as PDF, DOC, DOCX, or TXT files
-- **Automatic Assignment:** Students are auto-assigned to exams upon enrollment
-- **Professional Student Portal:** Students view assigned exams with exam metadata
-- **Secure Exam Taking:** Students read questions and submit written responses
-- **Response Management:** Teachers view and download all student responses
-- **Credential Control:** Only teacher-created students can access the system
+- **Student Enrollment:** Teachers create student accounts and provide login credentials; students cannot self-register
+- **File-Based Exam Questions:** Exam questions can be added as uploaded files in PDF, DOC, DOCX, or TXT format
+- **Teacher-Controlled Student Credentials:** Only students registered by a teacher receive login details
+- **Automatic Assignment:** Students are auto-assigned to exams once created and enrolled
+- **Professional Student Portal:** Students view assigned exams, download uploaded question files, and write answers within the portal
+- **Secure Exam Taking:** Students complete examinations with controlled access and submission tracking
+- **Response Management:** Teachers view all student submissions in one place
 
 ## Run locally
 1. Open `config.js` and update `SUPABASE_URL` and `SUPABASE_ANON_KEY` with your Supabase project values.
@@ -59,8 +59,12 @@ create table submissions (
 3. Toggle **Confirm email** to OFF
 4. Save changes
 
-**Important:** This setting is essential for smooth operation. Students receive login credentials from their teacher; they do not self-register.
-
+**Important:** This setting is essential for smooth operation. Students receive login credentials from their teacher; they do not self-register. Only teachers can register student accounts and distribute credentials.
+### Student login procedure
+1. Teacher registers an educator account.
+2. Teacher creates student accounts from the teacher dashboard.
+3. The teacher shares the student email and password securely with each student.
+4. Students log in using the same portal and access assigned exams.
 ### File Upload Configuration
 The exam questions file should be in one of these formats:
 - **.txt** — Plain text (one question per line)
